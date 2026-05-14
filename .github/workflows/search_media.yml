@@ -43,24 +43,16 @@ jobs:
               for line in f:
                   data = json.loads(line)
                   vid_id = data.get('id', '')
-                  thumb_url = f'https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg' if vid_id else ''
-                  thumb_base64 = ''
-                  if thumb_url:
-                      try:
-                          resp = requests.get(thumb_url, timeout=10)
-                          if resp.status_code == 200:
-                              thumb_base64 = base64.b64encode(resp.content).decode('utf-8')
-                      except:
-                          pass
                   results.append({
                       'title': data.get('title',''),
                       'url': data.get('webpage_url','') or data.get('url',''),
                       'channel': data.get('channel','') or data.get('uploader',''),
-                      'thumbnail_base64': thumb_base64
+                      'thumbnail_base64': ''
                   })
           json_str = json.dumps(results, ensure_ascii=False)
           encoded = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-          with open('encoded_results.txt','w') as out:
+          print(f'DATA_START{encoded}DATA_END')
+          with open('body.txt','w') as out:
               out.write(encoded)
           "
 
@@ -81,41 +73,25 @@ jobs:
               for msg in soup.select('.tgme_widget_message_wrap'):
                   link_elem = msg.select_one('.tgme_widget_message_link')
                   title = msg.select_one('.tgme_widget_message_text')
-                  img_elem = msg.select_one('img')
-                  thumb_base64 = ''
-                  if img_elem and img_elem.get('src'):
-                      try:
-                          img_resp = requests.get(img_elem['src'], timeout=10)
-                          if img_resp.status_code == 200:
-                              thumb_base64 = base64.b64encode(img_resp.content).decode('utf-8')
-                      except:
-                          pass
                   if link_elem:
                       url = link_elem['href']
                       results.append({
                           'title': title.get_text(strip=True)[:100] if title else 'No title',
                           'url': url,
                           'channel': url.split('/')[3] if len(url.split('/'))>3 else '',
-                          'thumbnail_base64': thumb_base64
+                          'thumbnail_base64': ''
                       })
           json_str = json.dumps(results[:10], ensure_ascii=False)
           encoded = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-          with open('encoded_results.txt','w') as f:
+          with open('body.txt','w') as f:
               f.write(encoded)
           "
+          if [ ! -s body.txt ]; then echo 'W10=' > body.txt; fi
 
-      - name: Read encoded results
-        id: read_results
-        run: |
-          ENCODED=$(cat encoded_results.txt)
-          echo "DATA<<EOF" >> $GITHUB_ENV
-          echo "$ENCODED" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-      - name: Create Release with data
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ env.DATA }}
+          body_path: body.txt
           tag_name: search-${{ github.run_id }}
           name: Search Results - ${{ inputs.query }}
         env:
