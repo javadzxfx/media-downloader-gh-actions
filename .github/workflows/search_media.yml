@@ -26,12 +26,11 @@ jobs:
       
       - name: Install yt-dlp
         if: inputs.platform == 'youtube'
-        run: pip install yt-dlp
+        run: pip install yt-dlp requests
 
       - name: Search YouTube
         if: inputs.platform == 'youtube'
         run: |
-          pip install requests
           yt-dlp "ytsearch10:${{ inputs.query }}" --flat-playlist --dump-json > search_output.jsonl
           python3 -c "
           import json, requests, base64
@@ -98,8 +97,14 @@ jobs:
           "
           if [ ! -s results.json ]; then echo '[]' > results.json; fi
 
-      - name: Upload Search Results
-        uses: actions/upload-artifact@v4
+      - name: Upload Results as Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: search_results
-          path: results.json
+          files: results.json
+          tag_name: search-${{ github.run_id }}
+          name: Search Results - ${{ inputs.query }}
+          body: |
+            Query: ${{ inputs.query }}
+            Platform: ${{ inputs.platform }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
