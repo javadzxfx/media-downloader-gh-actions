@@ -15,6 +15,10 @@ on:
           - youtube
           - telegram
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   search:
     runs-on: ubuntu-latest
@@ -58,7 +62,7 @@ jobs:
               json.dump(results, out)
           "
 
-      - name: Search Telegram (public channels)
+      - name: Search Telegram
         if: inputs.platform == 'telegram'
         run: |
           pip install requests beautifulsoup4
@@ -103,8 +107,5 @@ jobs:
           files: results.json
           tag_name: search-${{ github.run_id }}
           name: Search Results - ${{ inputs.query }}
-          body: |
-            Query: ${{ inputs.query }}
-            Platform: ${{ inputs.platform }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
