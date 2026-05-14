@@ -87,8 +87,8 @@ jobs:
                       print("  No URL in best stream")
                       continue
                   
-                  print(f"  Quality: {best.get('quality', 'unknown')}, Format: {best.get('format', 'unknown')}")
-                  print(f"  Downloading from: {stream_url[:80]}...")
+                  print(f"  Quality: {best.get('quality', 'unknown')}")
+                  print(f"  Downloading...")
                   
                   video_resp = requests.get(stream_url, headers={"User-Agent": "Mozilla/5.0"}, stream=True, timeout=120)
                   
@@ -116,7 +116,9 @@ jobs:
           
           if not downloaded:
               print("All Piped instances failed")
-              sys.exit(1)print("Download successful!")
+              sys.exit(1)
+          
+          print("Download successful!")
           PYEOF
 
       - name: Download Telegram
