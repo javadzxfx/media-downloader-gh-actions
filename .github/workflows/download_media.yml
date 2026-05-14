@@ -31,171 +31,89 @@ jobs:
       - name: Download YouTube
         if: inputs.platform == 'youtube'
         run: |
-          pip install requests
-          python3 << 'PYEOF'
-          import requests, re, json, sys, os
-          from urllib.parse import unquote, parse_qs
-
-          url = "${{ inputs.url }}"
-          match = re.search(r'(?:v=|/)([a-zA-Z0-9_-]{11})', url)
-          if not match:
-              print("Invalid URL")
-              sys.exit(1)
+          pip install yt-dlp
           
-          video_id = match.group(1)
-          print(f"Video ID: {video_id}")
-
-          headers = {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.5",
-          }
-
-          session = requests.Session()
+          # ساخت فایل cookies ساده
+          echo "# Netscape HTTP Cookie File" > cookies.txt
+          echo ".youtube.com	TRUE	/	FALSE	2147483647	GPS	1" >> cookies.txt
+          echo ".youtube.com	TRUE	/	FALSE	2147483647	VISITOR_INFO1_LIVE	ZqV2xJq9y1E" >> cookies.txt
+          echo ".youtube.com	TRUE	/	FALSE	2147483647	YSC	Bi9IV1VxX5o" >> cookies.txt
           
-          # مرحله ۱: گرفتن صفحه
-          print("Loading page...")
-          resp = session.get(url, headers=headers, timeout=30)
-          html = resp.text
-          print(f"Page size: {len(html)} bytes")
-
-          # مرحله ۲: استخراج ytInitialData (نه ytInitialPlayerResponse)
-          # ytInitialData شامل اطلاعات اولیه ویدیو هست
-          match = re.search(r'var ytInitialData\s*=\s*({.+?});</script>', html)
-          if not match:
-              print("ytInitialData not found")
-              sys.exit(1)
-
-          data = json.loads(match.group(1))
-          
-          # مرحله ۳: پیدا کردن streaming formats در ytInitialData
-          # مسیر: contents -> twoColumnWatchNextResults -> results -> results -> contents -> ...
-          formats = None
-          
-          try:
-              # مسیرهای مختلف رو امتحان کن
-              contents = data.get("contents", {})
-              two_col = contents.get("twoColumnWatchNextResults", {})
-              results = two_col.get("results", {})
-              results_list = results.get("results", {}).get("contents", [])
-              
-              for item in results_list:
-                  player = item.get("videoPrimaryInfoRenderer", {})
-                  if player:
-                      print("Found videoPrimaryInfoRenderer")
-                  
-                  # بعضی وقتا streamingData تو یه جای دیگه‌ست
-                  if "playerResponse" in item:
-                      player_data = item["playerResponse"]
-                      streaming = player_data.get("streamingData", {})
-                      if streaming:
-                          formats = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
-                          break
-          except Exception as e:
-              print(f"Error traversing data: {e}")
-
-          # اگه از ytInitialData پیدا نشد، برو سراغ playerResponse جدا
-          if not formats:
-              print("Trying embedded playerResponse...")
-              match2 = re.search(r'ytInitialPlayerResponse\s*=\s*({.+?});', html)
-              if match2:
-                  player_data = json.loads(match2.group(1))
-                  streaming = player_data.get("streamingData", {})
-                  formats = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
-
-          if not formats:
-              print("No formats found in any source")
-              sys.exit(1)
-
-          print(f"Found {len(formats)} formats")
-          
-          # مرحله ۴: انتخاب بهترین فرمت
-          best = None
-          best_h = 0
-          for fmt in formats:
-              h = fmt.get("height", 0) or fmt.get("qualityLabel", "").replace("p", "0")
-              try:h = int(h)
-              except:
-                  h = 0
-              
-              mime = fmt.get("mimeType", "")
-              if "mp4" in mime.lower() and h > best_h:
-                  best_h = h
-                  best = fmt
-
-          if not best:
-              for fmt in formats:
-                  if fmt.get("url"):
-                      best = fmt
-                      break
-
-          if not best:
-              print("No suitable format")
-              sys.exit(1)
-
-          # مرحله ۵: استخراج URL
-          video_url = best.get("url", "")
-          if not video_url and "signatureCipher" in best:
-              cipher = best["signatureCipher"]
-              params = parse_qs(cipher)
-              video_url = unquote(params["url"][0])
-              if "s" in params:
-                  # ساده‌سازی signature
-                  video_url += "&sig=" + params["s"][0]
-
-          if not video_url:
-              print("No URL")
-              sys.exit(1)
-
-          print(f"Downloading {best_h}p...")
-          
-          # مرحله ۶: دانلود
-          dl_resp = session.get(video_url, headers={"User-Agent": headers["User-Agent"]}, stream=True, timeout=120)
-          
-          if dl_resp.status_code == 200:
-              with open("media.mp4", "wb") as f:
-                  for chunk in dl_resp.iter_content(chunk_size=8192):
-                      if chunk:
-                          f.write(chunk)
-              size = os.path.getsize("media.mp4")
-              print(f"Downloaded: {size} bytes")
-              if size < 10000:
-                  print("File too small")
-                  sys.exit(1)
-              print("Success!")
-          else:
-              print(f"Download failed: HTTP {dl_resp.status_code}")
-              sys.exit(1)
-          PYEOF
+          # تلاش ۱: با extractor-args و po_token خالی
+          yt-dlp \
+            --no-playlist \
+            -f "worst[ext=mp4]" \
+            -o "media.%(ext)s" \
+            --cookies cookies.txt \
+            --extractor-args "youtube:player_client=android;po_token=web;visitor_data=CgtZcVYyeEpxOXkxRSiF9bSWBjIKCgJJUxIEGgAgGQ%3D%3D" \
+            --user-agent "com.google.android.youtube/19.44.38 (Linux; U; Android 14; en_US) gzip" \
+            "${{ inputs.url }}" || \
+          yt-dlp \
+            --no-playlist \
+            -f "worst" \
+            -o "media.%(ext)s" \
+            --cookies cookies.txt \
+            --extractor-args "youtube:player_client=ios" \
+            --user-agent "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X; en_US)" \
+            "${{ inputs.url }}" || \
+          yt-dlp \
+            --no-playlist \
+            -f "worst" \
+            -o "media.%(ext)s" \
+            --cookies cookies.txt \
+            --extractor-args "youtube:player_client=mweb" \
+            "${{ inputs.url }}" || \
+          yt-dlp \
+            --no-playlist \
+            -f "worst" \
+            -o "media.%(ext)s" \
+            --cookies cookies.txt \
+            --extractor-args "youtube:player_client=web;po_token=web" \
+            "${{ inputs.url }}" || \
+          yt-dlp \
+            --no-playlist \
+            -o "media.%(ext)s" \
+            --cookies cookies.txt \
+            "${{ inputs.url }}"
 
       - name: Download Telegram
         if: inputs.platform == 'telegram'
         run: |
           pip install requests
-          python3 << 'PYEOF'
+          python3 -c "
           import requests, re, os, sys
-          url = "${{ inputs.url }}"
-          headers = {"User-Agent": "Mozilla/5.0"}
-          parts = url.replace("https://t.me/", "").split("/")
+          url = '${{ inputs.url }}'
+          headers = {'User-Agent': 'Mozilla/5.0'}
+          parts = url.replace('https://t.me/', '').split('/')
           channel = parts[0]
           msg_id = parts[1]
-          embed_url = f"https://t.me/{channel}/{msg_id}?embed=1"
+          embed_url = f'https://t.me/{channel}/{msg_id}?embed=1'
           r = requests.get(embed_url, headers=headers)
-          video = re.search(r'<meta property="og:video" content="([^"]+)"', r.text)
-          img = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+          video = re.search(r'<meta property=\"og:video\" content=\"([^\"]+)\"', r.text)
+          img = re.search(r'<meta property=\"og:image\" content=\"([^\"]+)\"', r.text)
           media_url = video.group(1) if video else img.group(1) if img else None
           if not media_url:
-              print("No media found")
+              print('No media found')
               sys.exit(1)
           media_resp = requests.get(media_url, headers=headers)
-          ext = "mp4" if video else "jpg"
-          filename = f"media.{ext}"
-          with open(filename, "wb") as f:
+          ext = 'mp4' if video else 'jpg'
+          filename = f'media.{ext}'
+          with open(filename, 'wb') as f:
               f.write(media_resp.content)
-          if ext != "mp4":
-              os.rename(filename, "media.mp4")
-          print(f"Downloaded: {os.path.getsize('media.mp4')} bytes")
-          PYEOF
+          if ext != 'mp4':
+              os.rename(filename, 'media.mp4')
+          print(f'Downloaded: {os.path.getsize(\"media.mp4\")} bytes')
+          "
+
+      - name: Check and upload
+        run: |
+          ls -la
+          if [ -f media.* ]; then
+            echo "FILE EXISTS"
+          else
+            echo "NO FILE"
+            exit 1
+          fi
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
