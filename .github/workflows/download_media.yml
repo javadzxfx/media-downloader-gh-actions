@@ -43,8 +43,8 @@ jobs:
           msg_id = parts[1]
           embed_url = f'https://t.me/{channel}/{msg_id}?embed=1'
           r = requests.get(embed_url, headers=headers)
-          video = re.search(r'<meta property=\"og:video\" content=\"([^\"]+)\"', r.text)
-          img = re.search(r'<meta property=\"og:image\" content=\"([^\"]+)\"', r.text)
+          video = re.search(r'<meta property="og:video" content="([^"]+)"', r.text)
+          img = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
           media_url = video.group(1) if video else img.group(1) if img else None
           if not media_url:
               print('No media found')
