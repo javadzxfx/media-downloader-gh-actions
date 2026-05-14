@@ -29,6 +29,8 @@ jobs:
         run: |
           pip install yt-dlp
           yt-dlp --no-playlist -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" -o "media.%(ext)s" "${{ inputs.url }}"
+          ls -la media.*
+          echo "FILE_SIZE=$(stat -c%s media.*)" >> $GITHUB_ENV
 
       - name: Download Telegram
         if: inputs.platform == 'telegram'
@@ -43,8 +45,8 @@ jobs:
           msg_id = parts[1]
           embed_url = f'https://t.me/{channel}/{msg_id}?embed=1'
           r = requests.get(embed_url, headers=headers)
-          video = re.search(r'<meta property="og:video" content="([^"]+)"', r.text)
-          img = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+          video = re.search(r'<meta property=\"og:video\" content=\"([^\"]+)\"', r.text)
+          img = re.search(r'<meta property=\"og:image\" content=\"([^\"]+)\"', r.text)
           media_url = video.group(1) if video else img.group(1) if img else None
           if not media_url:
               print('No media found')
@@ -56,12 +58,18 @@ jobs:
           if ext != 'mp4':
               os.rename(f'media.{ext}', 'media.mp4')
           "
+          ls -la media.*
+          echo "FILE_SIZE=$(stat -c%s media.*)" >> $GITHUB_ENV
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: media.mp4
-          tag_name: release-${{ github.run_id }}
+          files: media.*
+          tag_name: download-${{ github.run_id }}
           name: Download ${{ github.run_id }}
+          body: |
+            Platform: ${{ inputs.platform }}
+            URL: ${{ inputs.url }}
+            Downloaded at: ${{ github.event.repository.updated_at }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
