@@ -28,60 +28,28 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Download YouTube
-        if: inputs.platform == 'youtube'
-        run: |
-          pip install yt-dlp
-          python3 -c "
-          import subprocess, sys
-          url = '${{ inputs.url }}'
-          
-          # روش اول: استفاده از mweb client با PO Token
-          cmd = [
-              'yt-dlp',
-              '--no-playlist',
-              '-f', 'best[height<=720]/best',
-              '-o', 'media.%(ext)s',
-              '--extractor-args', 'youtube:player_client=mweb',
-              '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-              url
-          ]
-          
-          result = subprocess.run(cmd, capture_output=True, text=True)
-          print(result.stdout)
-          if result.returncode != 0:
-              print(result.stderr)
-              # روش دوم: با فرمت پایین‌تر
-              cmd2 = [
-                  'yt-dlp',
-                  '--no-playlist',
-                  '-f', 'worst',
-                  '-o', 'media.%(ext)s',
-                  '--extractor-args', 'youtube:player_client=android',
-                  url
-              ]
-              result2 = subprocess.run(cmd2, capture_output=True, text=True)
-              print(result2.stdout)
-              if result2.returncode != 0:
-                  print(result2.stderr)
-                  sys.exit(1)
-          
-          import os, glob
-          files = glob.glob('media.*')
-          for f in files:
-              print(f'Downloaded: {f} ({os.path.getsize(f)} bytes)')
-          if not files:
-              print('No media files found')
-              sys.exit(1)
-          "
-          ls -la
+      - name: Install yt-dlp
+        run: pip install yt-dlp requests
 
-      - name: Download Telegram
-        if: inputs.platform == 'telegram'
+      - name: Download Media
         run: |
-          pip install requests
-          python3 -c "
-          import requests, re, os, sys
+          if [ "${{ inputs.platform }}" = "youtube" ]; then
+            echo "Downloading from YouTube: ${{ inputs.url }}"
+            yt-dlp --no-playlist \
+              -f "best[height<=720]/best" \
+              -o "media.%(ext)s" \
+              --extractor-args "youtube:player_client=mweb" \
+              --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+              "${{ inputs.url }}" || \
+            yt-dlp --no-playlist \
+              -f "worst" \
+              -o "media.%(ext)s" \
+              --extractor-args "youtube:player_client=android" \
+              "${{ inputs.url }}"
+          else
+            echo "Downloading from Telegram: ${{ inputs.url }}"
+            python3 -c "
+          import requests, re, sys
           url = '${{ inputs.url }}'
           headers = {'User-Agent': 'Mozilla/5.0'}
           parts = url.replace('https://t.me/','').split('/')
@@ -100,44 +68,25 @@ jobs:
           with open(f'media.{ext}', 'wb') as f:
               f.write(media_resp.content)
           if ext != 'mp4':
+              import os
               os.rename(f'media.{ext}', 'media.mp4')
           "
+          fi
+          
+          # چک کن فایل دانلود شده
           ls -la
-
-      - name: Read file and encode to Base64
-        run: |
           FILE=$(ls media.* 2>/dev/null | head -1)
           if [ -z "$FILE" ]; then
-            echo "No media file found"
+            echo "ERROR: No media file found"
             exit 1
           fi
-          SIZE=$(stat -c%s "$FILE")
-          echo "File: $FILE, Size: $SIZE bytes"
-          
-          # اگه فایل کمتر از 800KB باشه، Base64 کن و بذار تو body
-          if [ "$SIZE" -lt 800000 ]; then
-            base64 -w0 "$FILE" > body.txt
-            echo "FILE_SIZE=$SIZE" >> $GITHUB_ENV
-            echo "USE_BODY=1" >> $GITHUB_ENV
-          else
-            echo "FILE_SIZE=$SIZE" >> $GITHUB_ENV
-            echo "USE_BODY=0" >> $GITHUB_ENV
-          fi- name: Create Release (Base64 in body)
-        if: env.USE_BODY == '1'
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: body.txt
-          tag_name: download-${{ github.run_id }}
-          name: Download ${{ github.run_id }} (${{ env.FILE_SIZE }} bytes)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "Downloaded: $FILE ($(stat -c%s "$FILE") bytes)"
 
-      - name: Create Release (File as asset)
-        if: env.USE_BODY == '0'
+      - name: Create Release with file
         uses: softprops/action-gh-release@v2
         with:
           files: media.*
           tag_name: download-${{ github.run_id }}
-          name: Download ${{ github.run_id }} (${{ env.FILE_SIZE }} bytes)
+          name: Download ${{ github.run_id }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
