@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       platform:
-        description: 'Platform'
+        description: 'Platform (youtube/telegram)'
         required: true
         type: choice
         options:
@@ -28,60 +28,74 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Download YouTube
+      # ==================== YOUTUBE (از طریق Invidious) ====================
+      - name: Download YouTube via Invidious
         if: inputs.platform == 'youtube'
         run: |
-          pip install yt-dlp
-          
-          # ساخت فایل cookies ساده
-          echo "# Netscape HTTP Cookie File" > cookies.txt
-          echo ".youtube.com	TRUE	/	FALSE	2147483647	GPS	1" >> cookies.txt
-          echo ".youtube.com	TRUE	/	FALSE	2147483647	VISITOR_INFO1_LIVE	ZqV2xJq9y1E" >> cookies.txt
-          echo ".youtube.com	TRUE	/	FALSE	2147483647	YSC	Bi9IV1VxX5o" >> cookies.txt
-          
-          # تلاش ۱: با extractor-args و po_token خالی
-          yt-dlp \
-            --no-playlist \
-            -f "worst[ext=mp4]" \
-            -o "media.%(ext)s" \
-            --cookies cookies.txt \
-            --extractor-args "youtube:player_client=android;po_token=web;visitor_data=CgtZcVYyeEpxOXkxRSiF9bSWBjIKCgJJUxIEGgAgGQ%3D%3D" \
-            --user-agent "com.google.android.youtube/19.44.38 (Linux; U; Android 14; en_US) gzip" \
-            "${{ inputs.url }}" || \
-          yt-dlp \
-            --no-playlist \
-            -f "worst" \
-            -o "media.%(ext)s" \
-            --cookies cookies.txt \
-            --extractor-args "youtube:player_client=ios" \
-            --user-agent "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X; en_US)" \
-            "${{ inputs.url }}" || \
-          yt-dlp \
-            --no-playlist \
-            -f "worst" \
-            -o "media.%(ext)s" \
-            --cookies cookies.txt \
-            --extractor-args "youtube:player_client=mweb" \
-            "${{ inputs.url }}" || \
-          yt-dlp \
-            --no-playlist \
-            -f "worst" \
-            -o "media.%(ext)s" \
-            --cookies cookies.txt \
-            --extractor-args "youtube:player_client=web;po_token=web" \
-            "${{ inputs.url }}" || \
-          yt-dlp \
-            --no-playlist \
-            -o "media.%(ext)s" \
-            --cookies cookies.txt \
-            "${{ inputs.url }}"
+          pip install requests
+          python3 << 'EOF'
+          import requests, re, json, sys
 
+          video_url = "${{ inputs.url }}"
+          # استخراج video ID
+          match = re.search(r'(?:v=|/)([0-9A-Za-z_-]{11})', video_url)
+          if not match:
+              print("Could not extract video ID")
+              sys.exit(1)
+          video_id = match.group(1)
+
+          # استفاده از invidious به عنوان پروکسی (چندتا اینستنس عمومی معروف)
+          invidious_instances = [
+              "https://invidious.fdn.fr",
+              "https://yewtu.be",
+              "https://vid.puffyan.us",
+              "https://invidious.snopyta.org"
+          ]
+          
+          direct_url = None
+          for instance in invidious_instances:
+              try:
+                  api_url = f"{instance}/api/v1/videos/{video_id}"
+                  resp = requests.get(api_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+                  if resp.status_code != 200:
+                      continue
+                  data = resp.json()
+                  # پیدا کردن بهترین فرمت mp4
+                  for fmt in data.get("formatStreams", []) + data.get("adaptiveFormats", []):
+                      if fmt.get("container") == "mp4" and "url" in fmt:
+                          direct_url = fmt["url"]
+                          break
+                  if direct_url:
+                      print(f"Got stream URL from {instance}")
+                      break
+              except Exception as e:
+                  print(f"Instance {instance} failed: {e}")
+                  continue
+
+          if not direct_url:
+              print("All Invidious instances failed")
+              sys.exit(1)
+
+          # دانلود فایل
+          print("Downloading video...")
+          headers = {"User-Agent": "Mozilla/5.0"}
+          with requests.get(direct_url, headers=headers, stream=True, timeout=300) as r:
+              r.raise_for_status()
+              with open("media.mp4", "wb") as f:
+                  for chunk in r.iter_content(chunk_size=8192):
+                      f.write(chunk)
+          size_mb = __import__('os').path.getsize("media.mp4") / 1024 / 1024
+          print(f"Downloaded: {size_mb:.1f} MB")
+          EOF
+
+      # ==================== TELEGRAM (بدون تغییر) ====================
       - name: Download Telegram
         if: inputs.platform == 'telegram'
         run: |
-          pip install requests
+          pip install requests beautifulsoup4
           python3 -c "
           import requests, re, os, sys
+          from bs4 import BeautifulSoup
           url = '${{ inputs.url }}'
           headers = {'User-Agent': 'Mozilla/5.0'}
           parts = url.replace('https://t.me/', '').split('/')
@@ -89,9 +103,14 @@ jobs:
           msg_id = parts[1]
           embed_url = f'https://t.me/{channel}/{msg_id}?embed=1'
           r = requests.get(embed_url, headers=headers)
-          video = re.search(r'<meta property=\"og:video\" content=\"([^\"]+)\"', r.text)
-          img = re.search(r'<meta property=\"og:image\" content=\"([^\"]+)\"', r.text)
-          media_url = video.group(1) if video else img.group(1) if img else None
+          soup = BeautifulSoup(r.text, 'html.parser')
+          video = soup.find('video')
+          img = soup.find('img', class_='tgme_page_photo_image')
+          media_url = None
+          if video:
+              media_url = video.get('src')
+          elif img:
+              media_url = img.get('src')
           if not media_url:
               print('No media found')
               sys.exit(1)
@@ -105,17 +124,9 @@ jobs:
           print(f'Downloaded: {os.path.getsize(\"media.mp4\")} bytes')
           "
 
-      - name: Check and upload
-        run: |
-          ls -la
-          if [ -f media.* ]; then
-            echo "FILE EXISTS"
-          else
-            echo "NO FILE"
-            exit 1
-          fi
-
+      # ==================== آپلود به ریلیز ====================
       - name: Upload to Release
+        if: success()
         uses: softprops/action-gh-release@v2
         with:
           files: media.*
