@@ -33,91 +33,111 @@ jobs:
         run: |
           pip install requests
           python3 -c "
-          import requests, re, json, sys, os
-          from urllib.parse import unquote
+          import requests, json, sys, os, re
           
           url = '${{ inputs.url }}'
+          match = re.search(r'(?:v=|/)([a-zA-Z0-9_-]{11})', url)
+          if not match:
+              print('Invalid URL')
+              sys.exit(1)
+          
+          video_id = match.group(1)
+          print(f'Video ID: {video_id}')
+          
+          # InnerTube API - Player endpoint
+          api_url = 'https://www.youtube.com/youtubei/v1/player'
           
           headers = {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-              'Accept': 'text/html,application/xhtml+xml',
-              'Accept-Language': 'en-US,en;q=0.5',
+              'Content-Type': 'application/json',
+              'Accept': '*/*',
+              'Origin': 'https://www.youtube.com',
+              'Referer': 'https://www.youtube.com/',
           }
           
-          session = requests.Session()
+          payload = {
+              'videoId': video_id,
+              'context': {
+                  'client': {
+                      'clientName': 'ANDROID_VR',
+                      'clientVersion': '1.60.19',
+                      'androidSdkVersion': 31,
+                      'userAgent': 'Mozilla/5.0 (Linux; Android 12; VR headset) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36,gzip(gfe)',
+                      'osName': 'Android',
+                      'osVersion': '12',
+                  }
+              },
+              'params': '8AEB',
+          }
           
-          print(f'Fetching: {url}')
-          resp = session.get(url, headers=headers, timeout=30)
+          print('Fetching player response...')
+          resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
           
           if resp.status_code != 200:
-              print(f'Failed to load page: HTTP {resp.status_code}')
+              print(f'API failed: HTTP {resp.status_code}')
               sys.exit(1)
           
-          print(f'Page loaded: {len(resp.text)} chars')
+          data = resp.json()
           
-          # روش 1: استخراج از ytInitialPlayerResponse
-          match = re.search(r'ytInitialPlayerResponse\s*=\s*({.+?});', resp.text)
-          if match:
-              data = json.loads(match.group(1))
-              streaming_data = data.get('streamingData', {})
-              formats = streaming_data.get('formats', []) + streaming_data.get('adaptiveFormats', [])
+          # استخراج streaming data
+          streaming = data.get('streamingData', {})
+          formats = streaming.get('formats', []) + streaming.get('adaptiveFormats', [])
+          
+          if not formats:
+              print('No formats found')
+              print(f'Playability: {data.get(\"playabilityStatus\", {})}')
+              sys.exit(1)
+          
+          best_format = None
+          best_quality = 0
+          
+          for fmt in formats:
+              url_present = fmt.get('url') or fmt.get('signatureCipher')
+              if url_present and fmt.get('mimeType', '').startswith('video/mp4'):
+                  height = fmt.get('height', 0)
+                  if height > best_quality:
+                      best_quality = height
+                      best_format = fmt
+          
+          if not best_format:
+              print('No MP4 format found')
+              for fmt in formats[:3]:
+                  print(json.dumps(fmt, indent=2)[:300])
+              sys.exit(1)
+          
+          print(f'Found: {best_quality}p MP4')
+          
+          video_url = best_format.get('url', '')
+          
+          if not video_url and 'signatureCipher' in best_format:
+              from urllib.parse import parse_qs, unquote
+              cipher = best_format['signatureCipher']
+              params_dict = parse_qs(cipher)
+              video_url = unquote(params_dict['url'][0])
+              if 's' in params_dict:
+                  video_url += '&sig=' + params_dict['s'][0]
+          
+          if not video_url:
+              print('Could not extract video URL')
+              sys.exit(1)
+          
+          print(f'Downloading...')
+          video_resp = requests.get(video_url, headers={'User-Agent': headers['User-Agent']}, stream=True, timeout=120)
+          
+          if video_resp.status_code == 200:
+              with open('media.mp4', 'wb') as f:
+                  for chunk in video_resp.iter_content(chunk_size=8192):
+                      if chunk:
+                          f.write(chunk)
               
-              best_format = None
-              best_quality = 0
+              size = os.path.getsize('media.mp4')
+              print(f'Downloaded: {size} bytes')
               
-              for fmt in formats:
-                  if 'url' in fmt and 'mimeType' in fmt:
-                      mime = fmt['mimeType']
-                      if 'video/mp4' in mime:
-                          quality = fmt.get('height', 0)
-                          if quality > best_quality:
-                              best_quality = quality
-                              best_format = fmt
-              
-              if best_format:
-                  video_url = best_format['url']
-                  print(f'Found: {best_quality}p MP4')
-                  
-                  print('Downloading...')
-                  video_resp = session.get(video_url, headers={'User-Agent': headers['User-Agent']}, stream=True, timeout=120)
-                  
-                  with open('media.mp4', 'wb') as f:
-                      for chunk in video_resp.iter_content(chunk_size=8192):
-                          if chunk:
-                              f.write(chunk)
-                  
-                  size = os.path.getsize('media.mp4')
-                  print(f'Downloaded: {size} bytes')
-                  
-                  if size > 10000:
-                      print('Success!')
-                      sys.exit(0)
+              if size > 10000:
+                  print('Success!')
+                  sys.exit(0)
           
-          # روش 2: استخراج مستقیم لینک googlevideo
-          print('Trying direct URL extraction...')
-          pattern = r'https://[^\"]+\.googlevideo\.com/[^\"&\s]+'
-          matches = re.findall(pattern, resp.text)
-          
-          for video_url in matches:
-              clean_url = unquote(video_url)
-              if '&' not in clean_url[:50]:
-                  continue
-              print(f'Trying: {clean_url[:100]}...')
-              try:
-                  video_resp = session.get(clean_url, headers={'User-Agent': headers['User-Agent']}, stream=True, timeout=120)
-                  if video_resp.status_code == 200:
-                      with open('media.mp4', 'wb') as f:
-                          for chunk in video_resp.iter_content(chunk_size=8192):
-                              if chunk:
-                                  f.write(chunk)
-                      size = os.path.getsize('media.mp4')
-                      print(f'Downloaded via method 2: {size} bytes')
-                      if size > 10000:
-                          sys.exit(0)
-              except:
-                  continue
-          
-          print('All methods failed')
+          print('Download failed')
           sys.exit(1)
           "
 
