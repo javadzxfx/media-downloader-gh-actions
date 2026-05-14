@@ -34,6 +34,7 @@ jobs:
           pip install requests
           python3 -c "
           import requests, json, sys, os, re
+          from urllib.parse import parse_qs, unquote
           
           url = '${{ inputs.url }}'
           match = re.search(r'(?:v=|/)([a-zA-Z0-9_-]{11})', url)
@@ -44,101 +45,129 @@ jobs:
           video_id = match.group(1)
           print(f'Video ID: {video_id}')
           
-          # InnerTube API - Player endpoint
           api_url = 'https://www.youtube.com/youtubei/v1/player'
           
-          headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-              'Content-Type': 'application/json',
-              'Accept': '*/*',
-              'Origin': 'https://www.youtube.com',
-              'Referer': 'https://www.youtube.com/',
-          }
-          
-          payload = {
-              'videoId': video_id,
-              'context': {
-                  'client': {
-                      'clientName': 'ANDROID_VR',
-                      'clientVersion': '1.60.19',
-                      'androidSdkVersion': 31,
-                      'userAgent': 'Mozilla/5.0 (Linux; Android 12; VR headset) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36,gzip(gfe)',
-                      'osName': 'Android',
-                      'osVersion': '12',
-                  }
+          clients = [
+              {
+                  'name': 'iOS',
+                  'clientName': 'IOS',
+                  'clientVersion': '19.45.4',
+                  'userAgent': 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X; en_US)',
+                  'osName': 'iPhone',
+                  'osVersion': '18.1.0.22B83',
               },
-              'params': '8AEB',
-          }
+              {
+                  'name': 'Android',
+                  'clientName': 'ANDROID',
+                  'clientVersion': '19.44.38',
+                  'userAgent': 'com.google.android.youtube/19.44.38 (Linux; U; Android 14; en_US) gzip',
+                  'osName': 'Android',
+                  'osVersion': '14',
+              },
+              {
+                  'name': 'TV',
+                  'clientName': 'TVHTML5',
+                  'clientVersion': '7.20241113.16.00',
+                  'userAgent': 'Mozilla/5.0 (Chromecast; Linux; Tizen 6.5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+              },
+          ]
           
-          print('Fetching player response...')
-          resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
+          success = False
           
-          if resp.status_code != 200:
-              print(f'API failed: HTTP {resp.status_code}')
-              sys.exit(1)
-          
-          data = resp.json()
-          
-          # استخراج streaming data
-          streaming = data.get('streamingData', {})
-          formats = streaming.get('formats', []) + streaming.get('adaptiveFormats', [])
-          
-          if not formats:
-              print('No formats found')
-              print(f'Playability: {data.get(\"playabilityStatus\", {})}')
-              sys.exit(1)
-          
-          best_format = None
-          best_quality = 0
-          
-          for fmt in formats:
-              url_present = fmt.get('url') or fmt.get('signatureCipher')
-              if url_present and fmt.get('mimeType', '').startswith('video/mp4'):
-                  height = fmt.get('height', 0)
-                  if height > best_quality:
-                      best_quality = height
-                      best_format = fmt
-          
-          if not best_format:
-              print('No MP4 format found')
-              for fmt in formats[:3]:
-                  print(json.dumps(fmt, indent=2)[:300])
-              sys.exit(1)
-          
-          print(f'Found: {best_quality}p MP4')
-          
-          video_url = best_format.get('url', '')
-          
-          if not video_url and 'signatureCipher' in best_format:
-              from urllib.parse import parse_qs, unquote
-              cipher = best_format['signatureCipher']
-              params_dict = parse_qs(cipher)
-              video_url = unquote(params_dict['url'][0])
-              if 's' in params_dict:
-                  video_url += '&sig=' + params_dict['s'][0]
-          
-          if not video_url:
-              print('Could not extract video URL')
-              sys.exit(1)
-          
-          print(f'Downloading...')
-          video_resp = requests.get(video_url, headers={'User-Agent': headers['User-Agent']}, stream=True, timeout=120)
-          
-          if video_resp.status_code == 200:
-              with open('media.mp4', 'wb') as f:
-                  for chunk in video_resp.iter_content(chunk_size=8192):
-                      if chunk:
-                          f.write(chunk)
+          for client in clients:
+              print(f'Trying client: {client[\"name\"]}...')
               
-              size = os.path.getsize('media.mp4')
-              print(f'Downloaded: {size} bytes')
+              payload = {
+                  'videoId': video_id,
+                  'context': {
+                      'client': {
+                          'clientName': client['clientName'],
+                          'clientVersion': client['clientVersion'],
+                          'userAgent': client['userAgent'],
+                          'osName': client.get('osName', ''),
+                          'osVersion': client.get('osVersion', ''),
+                      }
+                  }
+              }
               
-              if size > 10000:
-                  print('Success!')
-                  sys.exit(0)
+              headers = {
+                  'User-Agent': client['userAgent'],
+                  'Content-Type': 'application/json',
+                  'Accept': '*/*',
+              }
+              
+              try:
+                  resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
+                  data = resp.json()
+                  
+                  playability = data.get('playabilityStatus', {})
+                  status = playability.get('status', 'UNKNOWN')
+                  reason = playability.get('reason', '')
+                  
+                  print(f'  Status: {status} - {reason}')
+                  
+                  if status == 'OK':
+                      streaming = data.get('streamingData', {})
+                      formats = streaming.get('formats', []) + streaming.get('adaptiveFormats', [])
+                      
+                      if not formats:
+                          print('  No formats')
+                          continue
+                      
+                      best = None
+                      best_h = 0
+                      for fmt in formats:
+                          h = fmt.get('height', 0)
+                          mime = fmt.get('mimeType', '')
+                          if h > best_h and 'mp4' in mime:
+                              best_h = h
+                              best = fmt
+                      
+                      if not best:
+                          for fmt in formats:
+                              if fmt.get('url'):
+                                  best = fmt
+                                  break
+                      
+                      if not best:
+                          print('  No suitable format')
+                          continue
+                      
+                      video_url = best.get('url', '')
+                      if not video_url and 'signatureCipher' in best:
+                          cipher = best['signatureCipher']
+                          params = parse_qs(cipher)
+                          video_url = unquote(params['url'][0])
+                      
+                      if not video_url:
+                          print('  No URL')
+                          continue
+                      
+                      print(f'  Downloading {best_h}p...')
+                      dl_resp = requests.get(video_url, headers={'User-Agent': client['userAgent']}, stream=True, timeout=120)
+                      
+                      if dl_resp.status_code == 200:
+                          with open('media.mp4', 'wb') as f:
+                              for chunk in dl_resp.iter_content(chunk_size=8192):
+                                  if chunk:
+                                      f.write(chunk)
+                          
+                          size = os.path.getsize('media.mp4')
+                          print(f'  Downloaded: {size} bytes')
+                          if size > 10000:
+                              success = True
+                              break
+                  else:
+                      print(f'  Skipping client...')
+                      
+              except Exception as e:
+                  print(f'  Error: {e}')
           
-          print('Download failed')
-          sys.exit(1)
+          if not success:
+              print('All clients failed')
+              sys.exit(1)
+          
+          print('Success!')
           "
 
       - name: Download Telegram
