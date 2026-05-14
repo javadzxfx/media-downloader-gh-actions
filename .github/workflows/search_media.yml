@@ -38,11 +38,13 @@ jobs:
           with open('search_output.jsonl') as f:
               for line in f:
                   data = json.loads(line)
+                  vid_id = data.get('id', '')
+                  thumb = f'https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg' if vid_id else ''
                   results.append({
                       'title': data.get('title',''),
                       'url': data.get('webpage_url','') or data.get('url',''),
                       'channel': data.get('channel','') or data.get('uploader',''),
-                      'thumbnail': data.get('thumbnail','')
+                      'thumbnail': thumb
                   })
           with open('results.json','w') as out:
               json.dump(results, out)
