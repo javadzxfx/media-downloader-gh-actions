@@ -31,48 +31,92 @@ jobs:
       - name: Download YouTube
         if: inputs.platform == 'youtube'
         run: |
-          pip install yt-dlp
+          pip install requests
           python3 << 'PYEOF'
-          import subprocess, sys, os
+          import requests, re, sys, os, json
 
           url = "${{ inputs.url }}"
-
-          # ساخت فایل cookies با فرمت Netscape
-          cookies_content = """# Netscape HTTP Cookie File
-          .youtube.com	TRUE	/	FALSE	2147483647	VISITOR_INFO1_LIVE	ZqV2xJq9y1E
-          .youtube.com	TRUE	/	FALSE	2147483647	PREF	f6=40000000&tz=UTC
-          .youtube.com	TRUE	/	FALSE	2147483647	CONSENT	YES+cb
-          """
-
-          with open("cookies.txt", "w") as f:
-              f.write(cookies_content)
-
-          print("Cookie file created")
-
-          commands = [
-              ["yt-dlp", "--no-playlist", "-f", "best[height<=720]/best", "-o", "media.%(ext)s", "--cookies", "cookies.txt", "--user-agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36", url],
-              ["yt-dlp", "--no-playlist", "-f", "worst", "-o", "media.%(ext)s", "--cookies", "cookies.txt", "--extractor-args", "youtube:player_client=android_vr", url],
-              ["yt-dlp", "--no-playlist", "-f", "best", "-o", "media.%(ext)s", "--cookies", "cookies.txt", "--extractor-args", "youtube:player_client=tv", url],
-          ]
-
-          success = False
-          for cmd in commands:
-              print(f"Trying: {' '.join(cmd)}")
-              result = subprocess.run(cmd, capture_output=True, text=True)
-              if result.stdout:
-                  print(result.stdout[-500:])
-              if result.stderr:
-                  print(result.stderr[-500:])
-              if result.returncode == 0 and os.path.exists("media.mp4") or os.path.exists("media.webm") or os.path.exists("media.mkv"):
-                  success = True
-                  break
-              print("  Failed, trying next method...")
-
-          if not success:
-              print("All methods failed")
+          
+          match = re.search(r'(?:v=|/)([a-zA-Z0-9_-]{11})', url)
+          if not match:
+              print("Invalid YouTube URL")
               sys.exit(1)
-
-          print("Download successful!")
+          
+          video_id = match.group(1)
+          print(f"Video ID: {video_id}")
+          
+          piped_instances = [
+              "https://pipedapi.kavin.rocks",
+              "https://pipedapi.tokhmi.xyz",
+              "https://pipedapi.moomoo.me",
+              "https://pipedapi.syncpundit.io",
+              "https://pipedapi.adminforge.de",
+              "https://pipedapi.qdi.fi",
+              "https://pipedapi.leptons.xyz",
+              "https://piped-api.garudalinux.org",
+              "https://pipedapi.r4fo.com",
+          ]
+          
+          downloaded = False
+          
+          for instance in piped_instances:
+              try:
+                  api_url = f"{instance}/streams/{video_id}"
+                  print(f"Trying: {api_url}")
+                  
+                  resp = requests.get(api_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+                  
+                  if resp.status_code != 200:
+                      print(f"  Failed: HTTP {resp.status_code}")
+                      continue
+                  
+                  data = resp.json()
+                  
+                  video_streams = data.get("videoStreams", [])
+                  if not video_streams:
+                      print("  No video streams found")
+                      continue
+                  
+                  best = video_streams[-1]
+                  for s in video_streams:
+                      if s.get("quality", "").endswith("p"):
+                          best = s
+                  
+                  stream_url = best.get("url", "")
+                  if not stream_url:
+                      print("  No URL in best stream")
+                      continue
+                  
+                  print(f"  Quality: {best.get('quality', 'unknown')}, Format: {best.get('format', 'unknown')}")
+                  print(f"  Downloading from: {stream_url[:80]}...")
+                  
+                  video_resp = requests.get(stream_url, headers={"User-Agent": "Mozilla/5.0"}, stream=True, timeout=120)
+                  
+                  if video_resp.status_code == 200:
+                      with open("media.mp4", "wb") as f:
+                          for chunk in video_resp.iter_content(chunk_size=8192):
+                              if chunk:
+                                  f.write(chunk)
+                      
+                      file_size = os.path.getsize("media.mp4")
+                      print(f"  Downloaded: {file_size} bytes")
+                      
+                      if file_size > 10000:
+                          downloaded = True
+                          break
+                      else:
+                          os.remove("media.mp4")
+                          print("  File too small, trying next...")
+                  else:
+                      print(f"  Stream download failed: HTTP {video_resp.status_code}")
+                      
+              except Exception as e:
+                  print(f"  Error: {type(e).__name__}: {str(e)[:100]}")
+                  continue
+          
+          if not downloaded:
+              print("All Piped instances failed")
+              sys.exit(1)print("Download successful!")
           PYEOF
 
       - name: Download Telegram
